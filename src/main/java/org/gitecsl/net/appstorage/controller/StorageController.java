@@ -11,7 +11,6 @@ import com.hierynomus.smbj.connection.Connection;
 import com.hierynomus.smbj.session.Session;
 import com.hierynomus.smbj.share.DiskShare;
 import com.hierynomus.smbj.share.File;
-import lombok.RequiredArgsConstructor;
 import org.gitecsl.net.appstorage.entity.DriverDocument;
 import org.gitecsl.net.appstorage.service.UploadedFileService;
 import org.slf4j.Logger;
@@ -30,16 +29,18 @@ import java.net.URI;
 import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.util.EnumSet;
+import java.util.List;
+import java.util.Map;
 
 @RestController
-@RequestMapping("/api/store")
+@RequestMapping("/api/document")
 @CrossOrigin(origins = "*")
-public class StoreController {
+public class StorageController {
 
-    Logger logger = LoggerFactory.getLogger(StoreController.class);
+    Logger logger = LoggerFactory.getLogger(StorageController.class);
 
     private final UploadedFileService uploadedFileService;
-    public StoreController(UploadedFileService uploadedFileService) {
+    public StorageController(UploadedFileService uploadedFileService) {
         this.uploadedFileService = uploadedFileService;
     }
 
@@ -58,21 +59,21 @@ public class StoreController {
     @Value("${samba.domain:}")
     private String smbDomain;
 
-    @PostMapping("/{postulanteId}")
-    public ResponseEntity<String> uploadFile(
-            @PathVariable String postulanteId,
+    @PostMapping("/upload/{postulantId}")
+    public ResponseEntity<Map<String, String>> uploadFile(
+            @PathVariable String postulantId,
             @RequestParam("file") MultipartFile file) throws IOException {
 
         if (file.isEmpty()) {
-            return ResponseEntity.badRequest().body("El archivo no puede estar vacío");
+            return ResponseEntity.badRequest().body(Map.of("message","El archivo no puede estar vacío"));
         }
         if (file.getOriginalFilename().contains("..")) {
-            return ResponseEntity.badRequest().body("Nombre de archivo inválido (Path Traversal)");
+            return ResponseEntity.badRequest().body(Map.of("message","Nombre de archivo inválido (Path Traversal)"));
         }
 
         // Verificar tipo de archivo (ej: solo PDF)
         if (!file.getContentType().equals("application/pdf")) {
-            return ResponseEntity.badRequest().body("Solo se permiten archivos PDF");
+            return ResponseEntity.badRequest().body(Map.of("message","Solo se permiten archivos PDF"));
         }
 
         SMBClient client = new SMBClient();
@@ -82,7 +83,7 @@ public class StoreController {
             Session session = connection.authenticate(ac);
 
             try (DiskShare share = (DiskShare) session.connectShare(this.smbShare)) {
-                String directoryPath = "postulante-" + postulanteId;
+                String directoryPath = "postulante-" + postulantId;
                 if (!share.folderExists(directoryPath)) {
                     share.mkdir(directoryPath);
                 }
@@ -111,23 +112,24 @@ public class StoreController {
 
             DriverDocument driverDocument = new DriverDocument();
             driverDocument.setFilename(file.getOriginalFilename());
-            driverDocument.setPath("smb://" + this.smbHost + "/" + this.smbShare + "/" + "postulante-" + postulanteId + "/" + file.getOriginalFilename());
-            driverDocument.setPostulanteId(Integer.parseInt(postulanteId));
+            driverDocument.setPath("smb://" + this.smbHost + "/" + this.smbShare + "/" + "postulante-" + postulantId + "/" + file.getOriginalFilename());
+            driverDocument.setPostulanteId(Integer.parseInt(postulantId));
             driverDocument.setContentType(file.getContentType());
             driverDocument.setUploadDate(LocalDateTime.now());
 
             this.uploadedFileService.saveFileMetadata(driverDocument);
-            return ResponseEntity.ok("Archivo subido exitosamente.");
+            logger.info("Archivo subido: " + file.getOriginalFilename() + " a la ruta: " + driverDocument.getPath());
+            return ResponseEntity.ok(Map.of("message","Archivo subido exitosamente."));
 
         } catch (IOException | SMBApiException e) {
             logger.error("Error al subir archivo", e);
-            return ResponseEntity.internalServerError().body("Error al subir archivo: " + e.getMessage());
+            return ResponseEntity.internalServerError().body(Map.of("message","Error al subir archivo: " + e.getMessage()));
         }
     }
 
-    @GetMapping("/{postulanteId}/{filename:.+}")
+    @GetMapping("/{documentId}/{filename:.+}")
     public ResponseEntity<byte[]> downloadFile(
-            @PathVariable String postulanteId,
+            @PathVariable int documentId,
             @PathVariable String filename) {
 
         try (SMBClient client = new SMBClient()) {
@@ -140,7 +142,7 @@ public class StoreController {
                  Session session = connection.authenticate(auth);
                  DiskShare share = (DiskShare) session.connectShare(shareName)) {
 
-                String remotePath = "postulante-" + postulanteId + "\\" + filename;
+                String remotePath = "postulante-" + documentId + "\\" + filename;
 
                 if (!share.fileExists(remotePath)) {
                     return ResponseEntity.notFound().build();
@@ -169,6 +171,11 @@ public class StoreController {
         }
     }
 
+    @GetMapping("/{postulantId}")
+    private ResponseEntity<List<DriverDocument>> getDocuments(@PathVariable int postulantId) {
+        List<DriverDocument> documents = this.uploadedFileService.getAllDocumentOfPostulant(postulantId);
+        return ResponseEntity.ok(documents);
+    }
 
     //contra path traversal
 }
