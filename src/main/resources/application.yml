@@ -1,7 +1,7 @@
 server:
   port: 8082
   servlet:
-    context-path: /app-storage
+    context-path: /file-service
 
 spring:
   application:

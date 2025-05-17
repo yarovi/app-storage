@@ -20,7 +20,7 @@ public class DriverDocument {
     )
     private Long id;
 
-    private int postulanteId;
+    private int postulantId;
     private String filename;
     private String path;
     private String contentType;

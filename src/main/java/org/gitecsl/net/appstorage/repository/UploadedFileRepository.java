@@ -6,5 +6,5 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import java.util.List;
 
 public interface UploadedFileRepository extends JpaRepository<DriverDocument, Long> {
-    List<DriverDocument> findByPostulanteId(int postulanteId);
+    List<DriverDocument> findByPostulantId(int postulanteId);
 }

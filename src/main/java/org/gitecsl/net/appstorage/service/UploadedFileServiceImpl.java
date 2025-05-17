@@ -20,7 +20,7 @@ public class UploadedFileServiceImpl implements  UploadedFileService {
 
     @Override
     public List<DriverDocument> getAllDocumentOfPostulant(int postulanteId) {
-        return uploadedFileRepository.findByPostulanteId(postulanteId);
+        return uploadedFileRepository.findByPostulantId(postulanteId);
     }
 
     @Override

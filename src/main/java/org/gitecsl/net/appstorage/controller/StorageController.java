@@ -33,13 +33,14 @@ import java.util.List;
 import java.util.Map;
 
 @RestController
-@RequestMapping("/api/document")
+@RequestMapping("/api/documents")
 @CrossOrigin(origins = "*")
 public class StorageController {
 
     Logger logger = LoggerFactory.getLogger(StorageController.class);
 
     private final UploadedFileService uploadedFileService;
+
     public StorageController(UploadedFileService uploadedFileService) {
         this.uploadedFileService = uploadedFileService;
     }
@@ -62,68 +63,74 @@ public class StorageController {
     @PostMapping("/upload/{postulantId}")
     public ResponseEntity<Map<String, String>> uploadFile(
             @PathVariable String postulantId,
-            @RequestParam("file") MultipartFile file) throws IOException {
+            @RequestParam("file") MultipartFile file) {
 
-        if (file.isEmpty()) {
-            return ResponseEntity.badRequest().body(Map.of("message","El archivo no puede estar vacío"));
-        }
-        if (file.getOriginalFilename().contains("..")) {
-            return ResponseEntity.badRequest().body(Map.of("message","Nombre de archivo inválido (Path Traversal)"));
-        }
+        try {
+            if (file.isEmpty()) {
+                return ResponseEntity.badRequest().body(Map.of("message", "El archivo no puede estar vacío"));
+            }
+            if (file.getOriginalFilename().contains("..")) {
+                return ResponseEntity.badRequest().body(Map.of("message", "Nombre de archivo inválido (Path Traversal)"));
+            }
 
-        // Verificar tipo de archivo (ej: solo PDF)
-        if (!file.getContentType().equals("application/pdf")) {
-            return ResponseEntity.badRequest().body(Map.of("message","Solo se permiten archivos PDF"));
-        }
+            // Verificar tipo de archivo (ej: solo PDF)
+            if (!file.getContentType().equals("application/pdf")) {
+                return ResponseEntity.badRequest().body(Map.of("message", "Solo se permiten archivos PDF"));
+            }
 
-        SMBClient client = new SMBClient();
+            SMBClient client = new SMBClient();
 
-        try (Connection connection = client.connect(this.smbHost)) {
-            AuthenticationContext ac = new AuthenticationContext(smbUser, smbPassword.toCharArray(), smbDomain);
-            Session session = connection.authenticate(ac);
+            try (Connection connection = client.connect(this.smbHost)) {
+                AuthenticationContext ac = new AuthenticationContext(smbUser, smbPassword.toCharArray(), smbDomain);
+                Session session = connection.authenticate(ac);
 
-            try (DiskShare share = (DiskShare) session.connectShare(this.smbShare)) {
-                String directoryPath = "postulante-" + postulantId;
-                if (!share.folderExists(directoryPath)) {
-                    share.mkdir(directoryPath);
-                }
+                try (DiskShare share = (DiskShare) session.connectShare(this.smbShare)) {
+                    String directoryPath = "postulante-" + postulantId;
+                    if (!share.folderExists(directoryPath)) {
+                        share.mkdir(directoryPath);
+                    }
 
-                String filename = Paths.get(file.getOriginalFilename()).getFileName().toString(); // prevenir path traversal
-                String remotePath = directoryPath + "\\" + filename;
+                    String filename = Paths.get(file.getOriginalFilename()).getFileName().toString(); // prevenir path traversal
+                    String remotePath = directoryPath + "\\" + filename;
 
-                try (File f = share.openFile(remotePath,
-                        EnumSet.of(AccessMask.GENERIC_WRITE),
-                        null,
-                        SMB2ShareAccess.ALL,
-                        SMB2CreateDisposition.FILE_OVERWRITE_IF,
-                        null)) {
+                    try (File f = share.openFile(remotePath,
+                            EnumSet.of(AccessMask.GENERIC_WRITE),
+                            null,
+                            SMB2ShareAccess.ALL,
+                            SMB2CreateDisposition.FILE_OVERWRITE_IF,
+                            null)) {
 
-                    try (OutputStream os = f.getOutputStream();
-                         InputStream is = file.getInputStream()) {
+                        try (OutputStream os = f.getOutputStream();
+                             InputStream is = file.getInputStream()) {
 
-                        byte[] buffer = new byte[4096];
-                        int bytesRead;
-                        while ((bytesRead = is.read(buffer)) != -1) {
-                            os.write(buffer, 0, bytesRead);
+                            byte[] buffer = new byte[4096];
+                            int bytesRead;
+                            while ((bytesRead = is.read(buffer)) != -1) {
+                                os.write(buffer, 0, bytesRead);
+                            }
                         }
                     }
                 }
+
+
+                DriverDocument driverDocument = new DriverDocument();
+                driverDocument.setFilename(file.getOriginalFilename());
+                driverDocument.setPath("smb://" + this.smbHost + "/" + this.smbShare + "/" + "postulante-" + postulantId + "/" + file.getOriginalFilename());
+                driverDocument.setPostulantId(Integer.parseInt(postulantId));
+                driverDocument.setContentType(file.getContentType());
+                driverDocument.setUploadDate(LocalDateTime.now());
+
+                this.uploadedFileService.saveFileMetadata(driverDocument);
+                logger.info("Archivo subido: " + file.getOriginalFilename() + " a la ruta: " + driverDocument.getPath());
+                return ResponseEntity.ok(Map.of("message", "Archivo subido exitosamente."));
+
+            } catch (IOException | SMBApiException e) {
+                logger.error("Error al subir archivo", e);
+                return ResponseEntity.internalServerError().body(Map.of("message", "Error al subir archivo: " + e.getMessage()));
             }
-
-            DriverDocument driverDocument = new DriverDocument();
-            driverDocument.setFilename(file.getOriginalFilename());
-            driverDocument.setPath("smb://" + this.smbHost + "/" + this.smbShare + "/" + "postulante-" + postulantId + "/" + file.getOriginalFilename());
-            driverDocument.setPostulanteId(Integer.parseInt(postulantId));
-            driverDocument.setContentType(file.getContentType());
-            driverDocument.setUploadDate(LocalDateTime.now());
-
-            this.uploadedFileService.saveFileMetadata(driverDocument);
-            logger.info("Archivo subido: " + file.getOriginalFilename() + " a la ruta: " + driverDocument.getPath());
-            return ResponseEntity.ok(Map.of("message","Archivo subido exitosamente."));
-
-        } catch (IOException | SMBApiException e) {
-            logger.error("Error al subir archivo", e);
-            return ResponseEntity.internalServerError().body(Map.of("message","Error al subir archivo: " + e.getMessage()));
+        } catch (Exception e) {
+            logger.error("Error inesperado: " + e.getMessage(), e);
+            return ResponseEntity.internalServerError().body(Map.of("message", "Error inesperado: " + e.getMessage()));
         }
     }
 
@@ -132,6 +139,7 @@ public class StorageController {
             @PathVariable int documentId,
             @PathVariable String filename) {
 
+        logger.info("Los Parametros son: documentId: " + documentId + " filename: " + filename);
         try (SMBClient client = new SMBClient()) {
             URI smbUri = URI.create("smb://134.122.125.240/public"); // ejemplo: smb://134.122.125.240/public
             String host = smbUri.getHost(); // 134.122.125.240
